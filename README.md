@@ -47,7 +47,7 @@ Basically it's just like a "mail", where messages are sent to queues and can be 
 
 ### 1 - Messages
 
-Are data that you wish to transmit. It can be a text, JSON, binary ou any format of your choice.
+The data that you wish to transmit. It can be a text, JSON, binary ou any format of your choice.
 
 ### 2 - Producer
 
@@ -258,10 +258,14 @@ This class will be responsible for consuming our queue.
 
 It'll be a public method (void) and we can pass the @RabbitListener! Inside of it, we pass the queue name.
 
-After we consume this queue from RabbitMQ, we have a specific contract to use, it's a interface called "Message" (from
+After we consume this queue from RabbitMQ, we have a specific contract to use, it's an interface called "Message" (from
 Spring Messaging). 
 
-Inside this contract, we'll use a Generics. In this case, the payload of the message that we are going to consume. 
+![img_4.png](img_4.png)
+
+Inside this contract, we'll use a Generics. In this case, the payload or the header of the message that we are going to consume.
+
+![img_7.png](img_7.png)
 
 Thus, we need to create a [DTO](#dto).
 
@@ -269,7 +273,29 @@ This DTO will have everything that is returned in that json object (codigoPedido
 
 We also have to create a DTO for the list of itens :).
 
-### DTO
+### DTOs
+
+#### OrderCreatedResponse
+
+![img_5.png](img_5.png)
+
+```java
+public record OrderCreatedResponse(Long codigoPedido,
+                                   Long codigoCliente,
+                                   List<OrderItemDto> itens) {
+}
+```
+
+#### OrderItemDto
+
+![img_6.png](img_6.png)
+
+```java
+public record OrderItemDto(String produto,
+                           Integer quantidade,
+                           BigDecimal preco) {
+}
+```
 
 ### Inside the method
 
@@ -279,12 +305,39 @@ Since we are using this Message interface, we can have access to the payload and
 
 The message by default will be a JSON object, we need to define a JSON converter.
 
-We'll create a bean inside the RabbitMqConfig, responsible to make these payloads conversions.
+We'll create a bean inside the RabbitMqConfig, responsible to make these payloads conversions, using jackson.
+
+And we'll also create the method to initiate the queue.
+
+#### RabbitMqConfigFinal
 
 ```java
+@Configuration
+public class RabbitMqConfig {
+
+  public static final String ORDER_CREATED_QUEUE = "btg-pactual-order-created";
+
+
+  //convertindo from JSON to Java
+  @Bean
+  public Jackson2JsonMessageConverter jackson2JsonMessageConverter() {
+    return new Jackson2JsonMessageConverter();
+  }
+
+
+  //creating the queue
+  @Bean
+  public Declarable orderCreatedQueue() {
+    return new Queue(ORDER_CREATED_QUEUE);
+  }
+}
 ```
 
 To check the created queue go to: ``localhost:15672/queues``.
+
+Queue created:
+
+![img_8.png](img_8.png)
 
 To know if our application is consuming the queue properly, we have to publish a message.
 
@@ -313,9 +366,9 @@ Queues and streams > scroll down > publish message >
    }
 ```
 
+![img_9.png](img_9.png)
+
 As soon as we published it, we can check the log on the application (if we inserted the Logger).
-
-
 
 
 ## Create the save implementation (Saving Order on MongoDB)
@@ -327,26 +380,143 @@ Now we'll get the message from the queue and save it on the database.
 Extends from MongoRepository.
 
 ```java
+@Repository
+public interface OrderRepository extends MongoRepository<Order, Long> {}
 ```
 
 ### OrderService
 
 We'll receive the OrderCreatedEvent and convert to an entity.
 
-We can use streams to set the items and after, create a method for it.
+The first thing, we are going to inject the OrderRepository with the constructor.
+
+The main method (save), will return void and will have a OrderCreatedResponse (the entire JSON object) as a parameter.
+
+We can use streams to set the items and calcule the total value of the order and after, create a method for it.
 
 ```java
+@Service
+public class OrderService {
+
+    private final OrderRepository orderRepository;
+
+    public OrderService(OrderRepository orderRepository) {
+        this.orderRepository = orderRepository;
+    }
+
+    private static OrderItem getOrderItems(OrderItemDto item) {
+        return new OrderItem(
+                item.produto(),
+                item.quantidade(),
+                item.preco()
+        );
+    }
+
+    public void save(OrderCreatedResponse event) {
+        Order order = new Order();
+        order.setOrderId(event.codigoPedido());
+        order.setClientId(event.codigoCliente());
+
+        order.setTotal(getTotal(event));
+
+
+        order.setOrderItems(
+                event.itens()
+                        .stream()
+                        .map(OrderService::getOrderItems)
+                .toList());
+
+        orderRepository.save(order);
+    }
+
+    private BigDecimal getTotal(OrderCreatedResponse event) {
+        return event.itens()
+                .stream()
+                .map(i -> i.preco().multiply(BigDecimal.valueOf(i.quantidade())))
+                .reduce(BigDecimal::add)
+                //caso não tenha nada retorna um zero
+                .orElse(BigDecimal.ZERO);
+    }
+}
+
 ```
 
 After finishing the service, we have to join te OrderService with the listener.
 
+
 ## Testing the flow (rabbitmq -> spring -> mongodb)
+
+Go to the Listener class.
 
 Import the OrderService, inject on the constructor.
 
 Inside the listen method, use the ``.save()`` inserting the payload (the message itself).
 
+```java
+@Component
+public class OrderCreatedListener {
+
+    private final Logger logger = LoggerFactory.getLogger(OrderCreatedListener.class);
+
+    private final OrderService orderService;
+
+    public OrderCreatedListener(OrderService orderService) {
+        this.orderService = orderService;
+    }
+
+    @RabbitListener(queues = ORDER_CREATED_QUEUE)
+    public void listen(Message<OrderCreatedResponse> message) {
+        logger.info("Message consumed: {}", message);
+
+        orderService.save(message.getPayload());
+    }
+}
+```
+
 After that, we can run the application and publish the message on RabbitMQ.
 
 Checking the MongoDB Compass, the register should be in the database.
+
+# Summary
+
+We created the entities, the attributes where based on the object that we were going to publish on the RabbitMQ.
+
+```json
+{
+  "codigoPedido": 1001,
+  "codigoCliente":1,
+  "itens": [
+    {
+      "produto": "lápis",
+      "quantidade": 100,
+      "preco": 1.10
+    },
+    {
+      "produto": "caderno",
+      "quantidade": 10,
+      "preco": 1.00
+    }
+  ]
+}
+```
+
+For the application be able to "listen" everything that's happening on RabbitMQ, we have to create a class responsible
+for that.
+
+This class will have a method that's going to use an interface (Message) that will be able to access the header and the 
+payload.
+
+This interface uses Generics, so we have to use an DTO inside of it to get everything.
+
+![img_10.png](img_10.png)
+
+Emphasizing that, this DTO is basically the JSON object. So, inside of it, it's essential to have a list of OrderItem,
+just like the Order entity.
+
+By default, this message is a JSON object so we need to convert to Java. Also, we need to initialize the queue as well,
+[check it.](#rabbitmqconfigfinal)
+
+Now it's time to create the service, to save the message on the database. Check everything [here.](#orderservice)
+
+
 
