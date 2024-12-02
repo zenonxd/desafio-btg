@@ -1,5 +1,6 @@
 package com.moreira.desafiobtg.services;
 
+import com.moreira.desafiobtg.dtos.AllOrdersByClientDTO;
 import com.moreira.desafiobtg.dtos.OrderCreatedResponse;
 import com.moreira.desafiobtg.dtos.OrderItemDto;
 import com.moreira.desafiobtg.entities.Order;
@@ -8,6 +9,7 @@ import com.moreira.desafiobtg.repositories.OrderRepository;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
+import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
@@ -52,4 +54,6 @@ public class OrderService {
                 //caso não tenha nada retorna um zero
                 .orElse(BigDecimal.ZERO);
     }
+
+
 }

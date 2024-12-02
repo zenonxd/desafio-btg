@@ -443,7 +443,6 @@ public class OrderService {
 
 After finishing the service, we have to join te OrderService with the listener.
 
-
 ## Testing the flow (rabbitmq -> spring -> mongodb)
 
 Go to the Listener class.
@@ -520,3 +519,34 @@ Now it's time to create the service, to save the message on the database. Check 
 
 
 
+# Endpoints
+
+We have to return: 
+
+The list of orders, the total value of an order and the quantity of orders by a certain client.
+
+We'll create an DTO. This DTO will have a generics type ``<T>``, and will receive a ``List<T> data`` and since we are working with
+pagination, we'll insert another DTO named Pagination, responsible for the pageable data.
+
+## ApiResponse (Inside the ResponseEntity)
+
+```java
+```
+
+## PaginationDTO 
+
+Will have the elements of the pageable. (page, pageSize, totalElements, totalPages)
+
+```java
+```
+
+## Controller
+
+Okay, in the method we are going to return a ResponseEntity, using the Record with generics, ``ResponseEntity<ApiResponse<>>``.
+
+We need know, to insert inside the record with generics, the response itself, that's going to be shown on Postman.
+
+orderId, clientId and the total value of the order.
+
+```java
+```
