@@ -14,11 +14,10 @@ import java.math.BigDecimal;
 @NoArgsConstructor
 @Setter
 @Getter
-@Document(value = "tb_order_item")
 public class OrderItem {
 
-    private String item;
-    private int quantity;
+    private String product;
+    private Integer quantity;
 
     @Field(targetType = FieldType.DECIMAL128)
     private BigDecimal price;

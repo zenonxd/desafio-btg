@@ -517,20 +517,22 @@ By default, this message is a JSON object so we need to convert to Java. Also, w
 
 Now it's time to create the service, to save the message on the database. Check everything [here.](#orderservice)
 
-
-
 # Endpoints
 
 We have to return: 
 
 The list of orders, the total value of an order and the quantity of orders by a certain client.
 
-We'll create an DTO. This DTO will have a generics type ``<T>``, and will receive a ``List<T> data`` and since we are working with
-pagination, we'll insert another DTO named Pagination, responsible for the pageable data.
+We'll create an DTO, named "ApiResponse". This DTO will have a generics type ``<T>``, and will receive a ``List<T> data`` 
+and since we are working with pagination, we'll insert another DTO named Pagination, responsible for the pageable data.
+
+# List of orders, total value of an order, total orders per client
 
 ## ApiResponse (Inside the ResponseEntity)
 
 ```java
+public record ApiResponse<T>(List<?> data,
+                             PaginationDTO pagination) {}
 ```
 
 ## PaginationDTO 
@@ -538,15 +540,224 @@ pagination, we'll insert another DTO named Pagination, responsible for the pagea
 Will have the elements of the pageable. (page, pageSize, totalElements, totalPages)
 
 ```java
+public record PaginationDTO(Integer page,
+                            Integer pageSize,
+                            Integer totalElements,
+                            Integer totalPages) {
+}
 ```
 
 ## Controller
 
 Okay, in the method we are going to return a ResponseEntity, using the Record with generics, ``ResponseEntity<ApiResponse<>>``.
 
-We need know, to insert inside the record with generics, the response itself, that's going to be shown on Postman.
+And we're going to insert inside the record with generics, the response itself, that's going to be shown on Postman.
 
 orderId, clientId and the total value of the order.
 
 ```java
+public record OrderResponse(Long orderId,
+                            Long clientId,
+                            BigDecimal total) {}
 ```
+
+We create now a ``Pagerequest``, receiving the page and the pageSize.
+
+We can now, create a variable named "body", that's going to call the service, passing the customerId and the pagerequest.
+
+```java
+
+    @GetMapping(value = "/{id}")
+    public ResponseEntity<ApiResponse<OrderResponse>> findAllOrdersByClientId(@RequestParam(name = "page", defaultValue = "0") Integer page,
+                                                                            @RequestParam(name = "pageSize", defaultValue = "10") Integer pageSize,
+                                                                            @PathVariable Long id) {
+        PageRequest pageRequest = PageRequest.of(page, pageSize);
+
+        var body = orderService.findAllOrdersByClientId(id, pageRequest);
+
+        return ResponseEntity.ok(null);
+    }
+```
+
+## Service
+
+Our method will return a ``Page<OrderResponse>``, receiving the customerId and the pagerequest.
+
+We can create a variable named orders, and use repository to make a custom search.
+
+Since the return is going to be a ``Page<Order>``, we can use the ``.map`` to convert into OrderResponse.
+
+To do that, we can make a static method in our DTO:
+
+```java
+public record OrderResponse(Long orderId,
+                            Long clientId,
+                            BigDecimal total) {
+
+    public static OrderResponse fromEntity(Order order) {
+        return new OrderResponse(
+                order.getOrderId(),
+                order.getClientId(),
+                order.getTotal()
+        );
+    }
+}
+```
+
+```java
+public Page<OrderResponse> findAllOrdersByClientId(Long id, PageRequest pageRequest) {
+    var orders = orderRepository.findAllByCustomerId(id, pageRequest);
+
+    return orders.map(OrderResponse::fromEntity);
+}
+```
+
+## Controller (Final)
+
+Now, we just have to fix what's going to be returned on the response entity.
+
+Inside the ``.ok()`` we can return creating our ``ApiResponse<>()``. Inside, we can return our list (first parameter
+of the ApiResponse).
+
+To get the list, we can use the variable ``.getContent()``. And finally, we create a PaginationResponse!
+
+We have two options, insert each attribute inside the constructor, or create a converter just like we did in the service
+layer.
+
+```java
+public record PaginationDTO(Integer page,
+                            Integer pageSize,
+                            Long totalElements,
+                            Integer totalPages) {
+
+    public static PaginationDTO fromPage(Page<?> request) {
+        return new PaginationDTO(
+                request.getNumber(),
+                request.getSize(),
+                request.getTotalElements(),
+                request.getTotalPages()
+        );
+    }
+}
+```
+
+```java
+    @GetMapping(value = "/{id}")
+    public ResponseEntity<ApiResponse<OrderResponse>> findAllOrdersByClientId(@RequestParam(name = "page", defaultValue = "0") Integer page,
+                                                                            @RequestParam(name = "pageSize", defaultValue = "10") Integer pageSize,
+                                                                            @PathVariable Long id) {
+        PageRequest pageRequest = PageRequest.of(page, pageSize);
+
+        var pageResponse = orderService.findAllOrdersByClientId(id, pageRequest);
+
+        return ResponseEntity.ok(new ApiResponse<>(
+                pageResponse.getContent(),
+                PaginationDTO.fromPage(pageResponse)
+        ));
+    }
+```
+
+### Postman
+
+```http request
+{{host}}/api/orders/1
+```
+
+### Json
+
+```json
+{
+    "data": [
+        {
+            "orderId": 1001,
+            "clientId": 1,
+            "total": 120.00
+        }
+    ],
+    "pagination": {
+        "page": 0,
+        "pageSize": 10,
+        "totalElements": 1,
+        "totalPages": 1
+    }
+}
+```
+
+## Understanding the method
+
+### Why Create a DTO with generics?
+
+The ApiResponse is basically a container that's going to store:
+
+1. A List<?> of data (in our case, the OrderResponse)
+2. And other information, like the pagination detail, thats why the postman return it's like this:
+
+![img_11.png](img_11.png)
+
+### Why generics <T>?
+
+When we use generics, we allow that this record (ApiResponse) to be reusable by different types of data without the 
+need to create another Record.
+
+It could be, for example: ``ApiResponse<ProductResponse>``
+
+### List<T>
+
+That indicates that the list can contain elements of any kind! But the individual elements, can't be handled directly
+in the record.
+
+# Calculating the total value of all orders per client
+
+We're not going to use Spring Data MongoRepository, we are going to use the Mongo Template.
+
+He is useful when we want to make complex queries inside mongoDB. So, if we need to make some aggregation or grouping,
+MongoTemplate is good for that.
+
+Our method will return a BigDecimal. 
+
+We'll create a var named ``aggregations``, ``newAggregation()``, and inside of it we write our conditional query.
+
+```java
+public BigDecimal findTotalOnOrdersByCustomerId(Long customerId) {
+        var aggregations = newAggregation(
+                //the key we want to compare
+                match(Criteria.where("customerId").is(customerId)),
+
+                //creating the query on MongoDB where he'll return the sum for us
+                group().sum("total").as("total")
+
+        );
+
+        //Document is always "BSON"
+        var response = mongoTemplate.aggregate(aggregations, "tb_order", Document.class);
+
+        //To access this document
+        //he is gonna try to access the "total" fied, if we cant, he's going to return zero
+        return new BigDecimal(response.getUniqueMappedResult().get("total").toString());
+
+
+}
+```
+
+To show this on the response, we have to make some changes on our ``ApiResponse``. Right now it's like this:
+
+```java
+public record ApiResponse<T>(List<?> data,
+                             PaginationDTO pagination) {
+}
+```
+
+We are going to insert another field, a Map that's going to be like a summary, check it out:
+
+```java
+public record ApiResponse<T>(Map<String, Object> summary,
+                             List<?> data,
+                             PaginationDTO pagination) {
+}
+```
+
+Inside our Controller, we are going to insert it in our constructor.
+
+```java
+```
+
